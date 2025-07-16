@@ -1,0 +1,23 @@
+apiVersion: v1
+entries:
+  volume-autoscaler:
+  - apiVersion: v2
+    appVersion: 2.0.0-gmp
+    created: "2025-07-16T13:18:58.009258+02:00"
+    description: Volume Autoscaler for GKE with Google Managed Prometheus - scales
+      Kubernetes volumes up automatically based on metrics from GMP, helm chart based
+      on Universal Helm Charts from DevOps Nirvana
+    digest: 0911b0f3ee03283f9340535f137e5501712a19e0dcc18a522b94fdfd9f6abdc3
+    home: https://github.com/Executioner1939/gke-volume-autoscaler
+    icon: https://raw.githubusercontent.com/Executioner1939/gke-volume-autoscaler/main/icon.png
+    maintainers:
+    - email: shadowrhyder@gmail.com
+      name: Executioner1939
+    name: volume-autoscaler
+    sources:
+    - https://github.com/Executioner1939/gke-volume-autoscaler
+    type: application
+    urls:
+    - https://executioner1939.github.io/gke-volume-autoscaler/volume-autoscaler-2.0.0.tgz
+    version: 2.0.0
+generated: "2025-07-16T13:18:58.008124+02:00"

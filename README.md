@@ -1,6 +1,6 @@
 # Kubernetes Volume Autoscaler for Google Managed Prometheus (GKE)
 
-<a href="https://hub.docker.com/r/shadowrhyder/gke-volume-autoscaler"><img src="https://img.shields.io/docker/pulls/shadowrhyder/gke-volume-autoscaler?style=plastic" alt="Docker Hub Pulls"></a> <a href="https://github.com/Executioner1939/gke-volume-autoscaler/stargazers"><img src="https://img.shields.io/github/stars/Executioner1939/gke-volume-autoscaler?style=social" alt="Stargazers on Github"></a>
+<a href="https://hub.docker.com/r/shadowrhyder/gke-volume-autoscaler"><img src="https://img.shields.io/docker/pulls/shadowrhyder/gke-volume-autoscaler?style=plastic" alt="Docker Hub Pulls"></a> <a href="https://github.com/Executioner1939/gke-volume-autoscaler/stargazers"><img src="https://img.shields.io/github/stars/Executioner1939/gke-volume-autoscaler?style=social" alt="Stargazers on Github"></a> [![Artifact Hub](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/gke-volume-autoscaler)](https://artifacthub.io/packages/search?repo=gke-volume-autoscaler)
 
 This repository contains a [Kubernetes controller](https://kubernetes.io/docs/concepts/architecture/controller/) that automatically increases the size of a Persistent Volume Claim (PVC) in Kubernetes when it is nearing full (either on space OR inode usage). It is specifically designed for Google Kubernetes Engine (GKE) Autopilot and uses Google Managed Prometheus for metrics.
 
@@ -63,33 +63,33 @@ gcloud iam service-accounts add-iam-policy-binding \
 ## Installation with Helm
 
 ```bash
-# Clone the repository
-git clone https://github.com/Executioner1939/gke-volume-autoscaler.git
-cd gke-volume-autoscaler
+# Add the Helm repository
+helm repo add gke-volume-autoscaler https://executioner1939.github.io/gke-volume-autoscaler/
+helm repo update
 
-# Install directly from the local chart
-helm install volume-autoscaler ./charts/volume-autoscaler \
+# Install the chart
+helm install volume-autoscaler gke-volume-autoscaler/volume-autoscaler \
   --namespace $NAMESPACE \
   --create-namespace \
   --set gcp_project_id=$PROJECT_ID \
   --set serviceAccount.annotations."iam\.gke\.io/gcp-service-account"="volume-autoscaler@$PROJECT_ID.iam.gserviceaccount.com"
 
 # Or with Slack notifications
-helm install volume-autoscaler ./charts/volume-autoscaler \
+helm install volume-autoscaler gke-volume-autoscaler/volume-autoscaler \
   --namespace $NAMESPACE \
   --create-namespace \
   --set gcp_project_id=$PROJECT_ID \
   --set serviceAccount.annotations."iam\.gke\.io/gcp-service-account"="volume-autoscaler@$PROJECT_ID.iam.gserviceaccount.com" \
   --set "slack_webhook_url=https://hooks.slack.com/services/123123123/4564564564/789789789789789789" \
   --set "slack_channel=my-slack-channel-name" \
-  --set "slack_prefix=GKE Cluster: my-cluster"
+  --set "slack_message_prefix=GKE Cluster: my-cluster"
 ```
 
 ### Advanced Helm usage
 
 ```bash
 # To view what changes it will make (requires helm diff plugin)
-helm diff upgrade volume-autoscaler ./charts/volume-autoscaler \
+helm diff upgrade volume-autoscaler gke-volume-autoscaler/volume-autoscaler \
   --namespace $NAMESPACE \
   --set gcp_project_id=$PROJECT_ID \
   --set serviceAccount.annotations."iam\.gke\.io/gcp-service-account"="volume-autoscaler@$PROJECT_ID.iam.gserviceaccount.com"

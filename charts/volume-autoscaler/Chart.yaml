@@ -10,4 +10,4 @@ name: volume-autoscaler
 sources:
 - https://github.com/Executioner1939/gke-volume-autoscaler
 type: application
-version: 3.0.1
+version: 3.0.2

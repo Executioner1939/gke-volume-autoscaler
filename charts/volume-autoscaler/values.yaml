@@ -49,7 +49,7 @@ deploymentStrategy:
 # Our image is on DockerHub
 image:
   repository: shadowrhyder/gke-volume-autoscaler
-  tag: latest  # Use specific version tags in production
+  tag: "3.0.2"  # Use specific version tags in production
 
 globalEnvs:
   ####################################

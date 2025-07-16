@@ -9,6 +9,9 @@ import google.auth
 import google.auth.transport.requests
 from google.auth import compute_engine
 import traceback
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class GMPClient:
@@ -37,7 +40,7 @@ class GMPClient:
         )
         self.auth_req = google.auth.transport.requests.Request()
         
-        print(f"Initialized GMP client for project: {self.project_id}")
+        logger.info("Initialized GMP client for project: %s", self.project_id)
     
     def _detect_project_id(self):
         """
@@ -49,21 +52,26 @@ class GMPClient:
         # Try environment variable first
         project_id = os.getenv('GCP_PROJECT_ID')
         if project_id:
+            logger.debug("Found GCP project ID from environment: %s", project_id)
             return project_id
         
         # Try to get from metadata service (works in GKE)
         try:
+            logger.debug("Attempting to get project ID from metadata service")
             import urllib.request
             req = urllib.request.Request(
                 'http://metadata.google.internal/computeMetadata/v1/project/project-id',
                 headers={'Metadata-Flavor': 'Google'}
             )
             with urllib.request.urlopen(req, timeout=2) as response:
-                return response.read().decode('utf-8')
-        except Exception:
-            # Metadata service not available
+                project_id = response.read().decode('utf-8')
+                logger.debug("Found GCP project ID from metadata service: %s", project_id)
+                return project_id
+        except Exception as e:
+            logger.debug("Metadata service not available: %s", str(e))
             pass
         
+        logger.warning("Could not detect GCP project ID")
         return None
     
     def _get_headers(self):
@@ -74,6 +82,7 @@ class GMPClient:
             dict: Headers with Bearer token
         """
         # Refresh token if needed
+        logger.debug("Refreshing authentication token")
         self.credentials.refresh(self.auth_req)
         return {
             'Authorization': f'Bearer {self.credentials.token}',
@@ -97,6 +106,8 @@ class GMPClient:
         url = f"{self.base_url}/query"
         params = {'query': promql_query}
         
+        logger.debug("Executing GMP query: %s", promql_query)
+        
         try:
             response = requests.get(
                 url, 
@@ -104,6 +115,8 @@ class GMPClient:
                 headers=self._get_headers(),
                 timeout=timeout
             )
+            
+            logger.debug("GMP query response status: %d", response.status_code)
             
             if response.status_code != 200:
                 error_msg = f"GMP query failed with status {response.status_code}"
@@ -113,20 +126,28 @@ class GMPClient:
                         error_msg += f": {error_detail['error']}"
                 except:
                     error_msg += f": {response.text}"
+                logger.error(error_msg)
                 raise Exception(error_msg)
             
             result = response.json()
             
             # Validate response structure
             if 'status' in result and result['status'] != 'success':
-                raise Exception(f"Query failed: {result.get('error', 'Unknown error')}")
+                error_msg = f"Query failed: {result.get('error', 'Unknown error')}"
+                logger.error(error_msg)
+                raise Exception(error_msg)
             
+            logger.debug("GMP query completed successfully")
             return result
             
         except requests.exceptions.Timeout:
-            raise Exception(f"GMP query timed out after {timeout} seconds")
+            error_msg = f"GMP query timed out after {timeout} seconds"
+            logger.error(error_msg)
+            raise Exception(error_msg)
         except requests.exceptions.RequestException as e:
-            raise Exception(f"GMP query request failed: {str(e)}")
+            error_msg = f"GMP query request failed: {str(e)}"
+            logger.error(error_msg)
+            raise Exception(error_msg)
     
     def test_connection(self):
         """
@@ -136,9 +157,15 @@ class GMPClient:
             bool: True if connection successful
         """
         try:
+            logger.debug("Testing GMP connection with 'up' query")
             # Simple query to test connectivity
             result = self.query('up', timeout=5)
-            return 'data' in result
+            success = 'data' in result
+            if success:
+                logger.debug("GMP connection test successful")
+            else:
+                logger.warning("GMP connection test failed: no data in response")
+            return success
         except Exception as e:
-            print(f"GMP connection test failed: {e}")
+            logger.error("GMP connection test failed: %s", str(e), exc_info=True)
             return False

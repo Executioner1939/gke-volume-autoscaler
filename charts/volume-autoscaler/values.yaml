@@ -46,10 +46,10 @@ replicaCount: 1
 deploymentStrategy:
   type: Recreate
 
-# Our image is on DockerHub, replace tag during builds automatically
+# Our image is on DockerHub
 image:
-  repository: devopsnirvana/kubernetes-volume-autoscaler
-  tag: latest  # This should be replaced with an semver tag release automatically during CI for releases
+  repository: executioner1939/gke-volume-autoscaler
+  tag: latest  # Use specific version tags in production
 
 globalEnvs:
   ####################################

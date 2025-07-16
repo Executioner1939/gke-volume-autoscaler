@@ -13,14 +13,11 @@ on:
       - master
 
 env:
-  DOCKER_IMAGE: ghcr.io/executioner1939/gke-volume-autoscaler
+  DOCKER_IMAGE: executioner1939/gke-volume-autoscaler
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
     
     steps:
       - name: Checkout
@@ -29,13 +26,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GitHub Container Registry
+      - name: Log in to Docker Hub
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Extract metadata
         id: meta

@@ -1,13 +1,24 @@
 #!/usr/bin/env python3
 import os
 import time
+import logging
+import sys
 from helpers import INTERVAL_TIME, GCP_PROJECT_ID, DRY_RUN, VERBOSE, get_settings_for_prometheus_metrics, is_integer_or_float, print_human_readable_volume_dict
 from helpers import convert_bytes_to_storage, scale_up_pvc, test_gmp_connection, describe_all_pvcs, send_kubernetes_event
 from helpers import fetch_pvcs_from_gmp, printHeaderAndConfiguration, calculateBytesToScaleTo, GracefulKiller, cache
 from gmp_client import GMPClient
 from prometheus_client import start_http_server, Summary, Gauge, Counter, Info
 import slack
-import sys, traceback
+import traceback
+
+# Configure logging
+log_level = logging.DEBUG if VERBOSE else logging.INFO
+logging.basicConfig(
+    level=log_level,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 # Initialize our Prometheus metrics (counters)
 PROMETHEUS_METRICS = {}
@@ -36,13 +47,15 @@ if __name__ == "__main__":
 
     # Initialize GMP client and test connection
     if not GCP_PROJECT_ID:
-        print("ERROR: GCP_PROJECT_ID must be set or detectable from metadata service")
+        logger.error("GCP_PROJECT_ID must be set or detectable from metadata service")
         exit(-1)
     
+    logger.info("Initializing GMP client for project: %s", GCP_PROJECT_ID)
     gmp_client = GMPClient(GCP_PROJECT_ID)
     test_gmp_connection(gmp_client)
 
     # Startup our prometheus metrics endpoint
+    logger.info("Starting Prometheus metrics server on port 8000")
     start_http_server(8000)
 
     # TODO: Test k8s access, or just test on-the-fly below?
@@ -51,6 +64,7 @@ if __name__ == "__main__":
     printHeaderAndConfiguration()
 
     # Setup our graceful handling of kubernetes signals
+    logger.info("Setting up signal handlers for graceful shutdown")
     killer = GracefulKiller()
     last_run = 0
 
@@ -67,20 +81,18 @@ if __name__ == "__main__":
         try:
             PROMETHEUS_METRICS['resize_evaluated'].inc()
             pvcs_in_kubernetes = describe_all_pvcs(simple=True)
-        except Exception:
-            print("Exception while trying to describe all PVCs")
-            traceback.print_exc()
+        except Exception as e:
+            logger.error("Exception while trying to describe all PVCs: %s", str(e), exc_info=True)
             time.sleep(MAIN_LOOP_TIME)
             continue
 
         # Fetch our volume usage from Prometheus
         try:
             pvcs_in_prometheus = fetch_pvcs_from_gmp(gmp_client)
-            print("Querying and found {} valid PVCs to assess in Google Managed Prometheus".format(len(pvcs_in_prometheus)))
+            logger.info("Found %d valid PVCs to assess in Google Managed Prometheus", len(pvcs_in_prometheus))
             PROMETHEUS_METRICS['num_valid_pvcs'].set(len(pvcs_in_prometheus))
-        except Exception:
-            print("Exception while trying to fetch PVC metrics from Google Managed Prometheus")
-            traceback.print_exc()
+        except Exception as e:
+            logger.error("Exception while trying to fetch PVC metrics from Google Managed Prometheus: %s", str(e), exc_info=True)
             time.sleep(MAIN_LOOP_TIME)
             continue
 
@@ -96,7 +108,7 @@ if __name__ == "__main__":
 
                 # Precursor check to ensure we have info for this pvc in kubernetes object
                 if volume_description not in pvcs_in_kubernetes:
-                    print("ERROR: The volume {} was not found in Kubernetes but had metrics in Google Managed Prometheus. This may be an old volume, was just deleted, or some random jitter is occurring. If this continues to occur, please report a bug.".format(volume_description))
+                    logger.error("Volume %s was not found in Kubernetes but had metrics in GMP. May be deleted or experiencing jitter.", volume_description)
                     continue
 
                 pvcs_in_kubernetes[volume_description]['volume_used_percent'] = volume_used_percent
@@ -107,24 +119,19 @@ if __name__ == "__main__":
                 pvcs_in_kubernetes[volume_description]['volume_used_inode_percent'] = volume_used_inode_percent
 
                 if VERBOSE:
-                    print("  VERBOSE DETAILS:")
-                    print("-------------------------------------------------------------------------------------------------------------")
+                    logger.debug("Volume %s: %d%% disk used of %s, %d%% inodes used",
+                                volume_description,
+                                volume_used_percent,
+                                pvcs_in_kubernetes[volume_description]['volume_size_status'],
+                                volume_used_inode_percent if volume_used_inode_percent > -1 else 0)
                     print_human_readable_volume_dict(pvcs_in_kubernetes[volume_description])
-                    print("-------------------------------------------------------------------------------------------------------------")
-                    print("Volume {} has {}% disk space used of the {} available".format(volume_description,volume_used_percent,pvcs_in_kubernetes[volume_description]['volume_size_status']))
-                    if volume_used_inode_percent > -1:
-                        print("Volume {} has {}% inodes used".format(volume_description,volume_used_inode_percent))
 
                 # Check if we are NOT in an alert condition
                 if volume_used_percent < pvcs_in_kubernetes[volume_description]['scale_above_percent'] and volume_used_inode_percent < pvcs_in_kubernetes[volume_description]['scale_above_percent']:
                     PROMETHEUS_METRICS['num_pvcs_below_threshold'].inc()
                     cache.unset(volume_description)
                     if VERBOSE:
-                        print("  and is not above {}% used".format(pvcs_in_kubernetes[volume_description]['scale_above_percent']))
-                        if volume_used_inode_percent > -1:
-                            print("  and is not above {}% inodes used".format(pvcs_in_kubernetes[volume_description]['scale_above_percent']))
-                    if VERBOSE:
-                        print("=============================================================================================================")
+                        logger.debug("Volume %s is below threshold (%d%%)", volume_description, pvcs_in_kubernetes[volume_description]['scale_above_percent'])
                     continue
                 else:
                     PROMETHEUS_METRICS['num_pvcs_above_threshold'].inc()

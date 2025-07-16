@@ -15,6 +15,9 @@ import os
 import select
 # Import for calling the slack URL
 import urllib.request
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Our helper to get STDIN if it exists in a non-blocking fashion
 def getBodyFromSTDIN():
@@ -61,8 +64,10 @@ def send(body, username="Kubernetes Volume Autoscaler", severity="info", channel
 
     # Skip if not set or set invalidly
     if not SLACK_WEBHOOK_URL or len(SLACK_WEBHOOK_URL) == 0 or SLACK_WEBHOOK_URL == "REPLACEME":
-        print("Slack webhook URL not set, skipping")
+        logger.debug("Slack webhook URL not set, skipping notification")
         return False
+    
+    logger.debug("Sending Slack notification: %s", body[:100] + "..." if len(body) > 100 else body)
 
     # lowercase our severity since thats our standard
     severity = str(severity).lower()
@@ -90,18 +95,22 @@ def send(body, username="Kubernetes Volume Autoscaler", severity="info", channel
     try:
         rawpayload = json.dumps(payload).encode('utf-8')
         if verbose:         print("VERBOSE: Sending request to " + SLACK_WEBHOOK_URL + "...")
+        logger.debug("Sending Slack request to webhook URL")
         request = urllib.request.Request(SLACK_WEBHOOK_URL, rawpayload, {'Content-Type': 'application/json', 'Content-Length': len(rawpayload)})
         response = urllib.request.urlopen(request)
         result = response.read()
         result = str(result)
         if ('ok' in result and len(result) < 8):
             if verbose:     print("Sent successfully")
+            logger.debug("Slack notification sent successfully")
             return True;
         else:
             if verbose:     print("Error while sending: {}".format(result))
+            logger.warning("Slack notification failed: %s", result)
             return False;
     except Exception as e:
         if verbose:         print("Error while sending: {}".format(e))
+        logger.error("Failed to send Slack notification: %s", str(e), exc_info=True)
         return False
 
 if __name__ == "__main__":

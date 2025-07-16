@@ -9,6 +9,9 @@ import signal                  # For sigkill handling
 import random                  # Random string generation
 import traceback               # Debugging/trace outputs
 import slack                   # For sending slack messages
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Used below in init variables
 def detect_gcp_project_id():
@@ -135,59 +138,68 @@ kubernetes_core_api  = kubernetes.client.CoreV1Api()
 #############################
 # Simple header printing before the program starts, prints the variables this is configured for at runtime
 def printHeaderAndConfiguration():
-    print("-------------------------------------------------------------------------------------------------------------")
-    print("               Volume Autoscaler - Configuration               ")
-    print("-------------------------------------------------------------------------------------------------------------")
-    print("                 GCP Project ID: {}".format(GCP_PROJECT_ID if GCP_PROJECT_ID else 'not-set'))
-    print("             Prometheus Version: {}{}".format(PROMETHEUS_VERSION," (upgrade to >= 2.30.0 to prevent some false positives)" if version.parse(PROMETHEUS_VERSION) < version.parse("2.30.0") else ""))
-    print("              Prometheus Labels: {{{}}}".format(PROMETHEUS_LABEL_MATCH))
-    print("        Interval to query usage: every {} seconds".format(INTERVAL_TIME))
-    print("                 Scale up after: {} intervals ({} seconds total)".format(SCALE_AFTER_INTERVALS, SCALE_AFTER_INTERVALS * INTERVAL_TIME))
-    print("         Scale above percentage: disk is over {}% full".format(SCALE_ABOVE_PERCENT))
-    print("     Scale up minimum increment: {} bytes, or {}".format(SCALE_UP_MIN_INCREMENT, convert_bytes_to_storage(SCALE_UP_MIN_INCREMENT)))
-    print("     Scale up maximum increment: {} bytes, or {}".format(SCALE_UP_MAX_INCREMENT, convert_bytes_to_storage(SCALE_UP_MAX_INCREMENT)))
-    print("          Scale up maximum size: {} bytes, or {}".format(SCALE_UP_MAX_SIZE, convert_bytes_to_storage(SCALE_UP_MAX_SIZE)))
-    print("            Scale up percentage: {}% of current disk size".format(SCALE_UP_PERCENT))
-    print("              Scale up cooldown: only resize every {} seconds".format(SCALE_COOLDOWN_TIME))
-    print("                   Verbose Mode: {}".format("ENABLED" if VERBOSE else "disabled"))
-    print("                        Dry Run: {}".format("ENABLED, no scaling will occur!" if DRY_RUN else "disabled"))
-    print("     HTTP Timeouts for k8s/prom: {} seconds".format(HTTP_TIMEOUT))
-    print("             Google Managed Prometheus Mode")
-    print(" Sending notifications to Slack: {}".format("ENABLED" if len(slack.SLACK_WEBHOOK_URL) > 0 else "disabled"))
+    logger.info("Volume Autoscaler Configuration:")
+    logger.info("  Mode: Google Managed Prometheus (GMP)")
+    logger.info("  GCP Project ID: %s", GCP_PROJECT_ID if GCP_PROJECT_ID else 'not-set')
+    logger.info("  Label selector: {%s}", PROMETHEUS_LABEL_MATCH)
+    logger.info("  Query interval: %d seconds", INTERVAL_TIME)
+    logger.info("  Scale after: %d intervals (%d seconds total)", SCALE_AFTER_INTERVALS, SCALE_AFTER_INTERVALS * INTERVAL_TIME)
+    logger.info("  Scale when disk over: %d%%", SCALE_ABOVE_PERCENT)
+    logger.info("  Scale up by: %d%% of current size", SCALE_UP_PERCENT)
+    logger.info("  Min increment: %s", convert_bytes_to_storage(SCALE_UP_MIN_INCREMENT))
+    logger.info("  Max increment: %s", convert_bytes_to_storage(SCALE_UP_MAX_INCREMENT))
+    logger.info("  Max size: %s", convert_bytes_to_storage(SCALE_UP_MAX_SIZE))
+    logger.info("  Cooldown period: %d seconds", SCALE_COOLDOWN_TIME)
+    logger.info("  Verbose mode: %s", "ENABLED" if VERBOSE else "disabled")
+    logger.info("  Dry run: %s", "ENABLED (no scaling will occur)" if DRY_RUN else "disabled")
+    logger.info("  HTTP timeout: %d seconds", HTTP_TIMEOUT)
+    logger.info("  Slack notifications: %s", "ENABLED" if len(slack.SLACK_WEBHOOK_URL) > 0 else "disabled")
     if len(slack.SLACK_WEBHOOK_URL) > 0:
-        print("                  Slack channel: {}".format(slack.SLACK_CHANNEL))
-        print("           Slack message prefix: {}".format(slack.SLACK_MESSAGE_PREFIX))
-        print("           Slack message suffix: {}".format(slack.SLACK_MESSAGE_SUFFIX))
-    print("-------------------------------------------------------------------------------------------------------------")
+        logger.info("    Slack channel: %s", slack.SLACK_CHANNEL)
+        if slack.SLACK_MESSAGE_PREFIX:
+            logger.info("    Message prefix: %s", slack.SLACK_MESSAGE_PREFIX)
+        if slack.SLACK_MESSAGE_SUFFIX:
+            logger.info("    Message suffix: %s", slack.SLACK_MESSAGE_SUFFIX)
 
 
 # Figure out how many bytes to scale to based on the original size, scale up percent, minimum increment and maximum size
 def calculateBytesToScaleTo(original_size, scale_up_percent, min_increment, max_increment, maximum_size):
     try:
         resize_to_bytes = int((original_size * (0.01 * scale_up_percent)) + original_size)
+        logger.debug("Calculated initial resize from %s to %s (%d%% increase)", 
+                    convert_bytes_to_storage(original_size), convert_bytes_to_storage(resize_to_bytes), scale_up_percent)
+        
         # Check if resize bump is too small
         if resize_to_bytes - original_size < min_increment:
             # Using default scale up if too small
             resize_to_bytes = original_size + min_increment
+            logger.debug("Resize increment too small, using minimum increment. New size: %s", 
+                        convert_bytes_to_storage(resize_to_bytes))
 
         # Check if resize bump is too large
         if resize_to_bytes - original_size > max_increment:
             # Using default scale up if too large
             resize_to_bytes = original_size + max_increment
+            logger.debug("Resize increment too large, using maximum increment. New size: %s", 
+                        convert_bytes_to_storage(resize_to_bytes))
 
         # Now check if it is too large overall (max disk size)
         if resize_to_bytes > maximum_size:
             resize_to_bytes = maximum_size
+            logger.debug("Resize would exceed maximum size, capping at: %s", 
+                        convert_bytes_to_storage(resize_to_bytes))
 
         # Now check if we're already maxed (16TB?) then we don't need to complete this scale activity
         if original_size == resize_to_bytes:
+            logger.debug("Volume already at maximum size, cannot resize further")
             return False
 
         # If we're good, send back our resizeto byets
+        logger.debug("Final resize calculation: %s -> %s", 
+                    convert_bytes_to_storage(original_size), convert_bytes_to_storage(resize_to_bytes))
         return resize_to_bytes
     except Exception as e:
-        print("Exception, unable to calculate bytes to scale to: ")
-        print(e)
+        logger.error("Exception calculating bytes to scale to: %s", str(e), exc_info=True)
         return False
 
 # Check if is integer or float
@@ -201,6 +213,7 @@ def is_integer_or_float(n):
 
 # Convert the K8s storage size definitions (eg: 10G, 5Ti, etc) into number of bytes
 def convert_storage_to_bytes(storage):
+    logger.debug("Converting storage size '%s' to bytes", storage)
 
     # BinarySI == Ki | Mi | Gi | Ti | Pi | Ei
     if storage.endswith('Ki'):
@@ -323,11 +336,13 @@ def convert_pvc_to_simpler_dict(pvc):
         return_dict['volume_size_spec'] = pvc.spec.resources.requests['storage']
     except:
         return_dict['volume_size_spec'] = "0"
+        logger.debug("PVC %s.%s has no storage spec", pvc.metadata.namespace, pvc.metadata.name)
     return_dict['volume_size_spec_bytes'] = convert_storage_to_bytes(return_dict['volume_size_spec'])
     try:
         return_dict['volume_size_status'] = pvc.status.capacity['storage']
     except:
         return_dict['volume_size_status'] = "0"
+        logger.debug("PVC %s.%s has no storage status", pvc.metadata.namespace, pvc.metadata.name)
     return_dict['volume_size_status_bytes'] = convert_storage_to_bytes(return_dict['volume_size_status'])
     return_dict['namespace'] = pvc.metadata.namespace
     try:
@@ -359,55 +374,65 @@ def convert_pvc_to_simpler_dict(pvc):
         if 'volume.autoscaler.kubernetes.io/last-resized-at' in pvc.metadata.annotations:
             return_dict['last_resized_at'] = int(pvc.metadata.annotations['volume.autoscaler.kubernetes.io/last-resized-at'])
     except Exception as e:
-        print("Could not convert last_resized_at to int: {}".format(e))
+        logger.warning("Could not convert last_resized_at to int for PVC %s.%s: %s", 
+                      pvc.metadata.namespace, pvc.metadata.name, str(e))
 
     try:
         if 'volume.autoscaler.kubernetes.io/scale-above-percent' in pvc.metadata.annotations:
             return_dict['scale_above_percent'] = int(pvc.metadata.annotations['volume.autoscaler.kubernetes.io/scale-above-percent'])
     except Exception as e:
-        print("Could not convert scale_above_percent to int: {}".format(e))
+        logger.warning("Could not convert scale_above_percent to int for PVC %s.%s: %s", 
+                      pvc.metadata.namespace, pvc.metadata.name, str(e))
 
     try:
         if 'volume.autoscaler.kubernetes.io/scale-after-intervals' in pvc.metadata.annotations:
             return_dict['scale_after_intervals'] = int(pvc.metadata.annotations['volume.autoscaler.kubernetes.io/scale-after-intervals'])
     except Exception as e:
-        print("Could not convert scale_after_intervals to int: {}".format(e))
+        logger.warning("Could not convert scale_after_intervals to int for PVC %s.%s: %s", 
+                      pvc.metadata.namespace, pvc.metadata.name, str(e))
 
     try:
         if 'volume.autoscaler.kubernetes.io/scale-up-percent' in pvc.metadata.annotations:
             return_dict['scale_up_percent'] = int(pvc.metadata.annotations['volume.autoscaler.kubernetes.io/scale-up-percent'])
     except Exception as e:
-        print("Could not convert scale_up_percent to int: {}".format(e))
+        logger.warning("Could not convert scale_up_percent to int for PVC %s.%s: %s", 
+                      pvc.metadata.namespace, pvc.metadata.name, str(e))
 
     try:
         if 'volume.autoscaler.kubernetes.io/scale-up-min-increment' in pvc.metadata.annotations:
             return_dict['scale_up_min_increment'] = int(pvc.metadata.annotations['volume.autoscaler.kubernetes.io/scale-up-min-increment'])
     except Exception as e:
-        print("Could not convert scale_up_min_increment to int: {}".format(e))
+        logger.warning("Could not convert scale_up_min_increment to int for PVC %s.%s: %s", 
+                      pvc.metadata.namespace, pvc.metadata.name, str(e))
 
     try:
         if 'volume.autoscaler.kubernetes.io/scale-up-max-increment' in pvc.metadata.annotations:
             return_dict['scale_up_max_increment'] = int(pvc.metadata.annotations['volume.autoscaler.kubernetes.io/scale-up-max-increment'])
     except Exception as e:
-        print("Could not convert scale_up_max_increment to int: {}".format(e))
+        logger.warning("Could not convert scale_up_max_increment to int for PVC %s.%s: %s", 
+                      pvc.metadata.namespace, pvc.metadata.name, str(e))
 
     try:
         if 'volume.autoscaler.kubernetes.io/scale-up-max-size' in pvc.metadata.annotations:
             return_dict['scale_up_max_size'] = int(pvc.metadata.annotations['volume.autoscaler.kubernetes.io/scale-up-max-size'])
     except Exception as e:
-        print("Could not convert scale_up_max_size to int: {}".format(e))
+        logger.warning("Could not convert scale_up_max_size to int for PVC %s.%s: %s", 
+                      pvc.metadata.namespace, pvc.metadata.name, str(e))
 
     try:
         if 'volume.autoscaler.kubernetes.io/scale-cooldown-time' in pvc.metadata.annotations:
             return_dict['scale_cooldown_time'] = int(pvc.metadata.annotations['volume.autoscaler.kubernetes.io/scale-cooldown-time'])
     except Exception as e:
-        print("Could not convert scale_cooldown_time to int: {}".format(e))
+        logger.warning("Could not convert scale_cooldown_time to int for PVC %s.%s: %s", 
+                      pvc.metadata.namespace, pvc.metadata.name, str(e))
 
     try:
         if 'volume.autoscaler.kubernetes.io/ignore' in pvc.metadata.annotations and pvc.metadata.annotations['volume.autoscaler.kubernetes.io/ignore'].lower() == "true":
             return_dict['ignore'] = True
+            logger.debug("PVC %s.%s has ignore annotation set to true", pvc.metadata.namespace, pvc.metadata.name)
     except Exception as e:
-        print("Could not convert ignore to bool: {}".format(e))
+        logger.warning("Could not convert ignore to bool for PVC %s.%s: %s", 
+                      pvc.metadata.namespace, pvc.metadata.name, str(e))
 
     # Return our cleaned up and simple flat dict with the values we care about, with overrides if specified
     return return_dict
@@ -416,6 +441,7 @@ def convert_pvc_to_simpler_dict(pvc):
 # Describe all the PVCs in Kubernetes
 # TODO: Check if we need to page this, and how well it handles scale (100+ PVCs, etc)
 def describe_all_pvcs(simple=False):
+    logger.debug("Fetching all PVCs from Kubernetes API")
     api_response = kubernetes_core_api.list_persistent_volume_claim_for_all_namespaces(timeout_seconds=HTTP_TIMEOUT)
     output_objects = {}
     for item in api_response.items:
@@ -424,12 +450,15 @@ def describe_all_pvcs(simple=False):
         else:
             output_objects["{}.{}".format(item.metadata.namespace,item.metadata.name)] = item
 
+    logger.debug("Found %d PVCs in Kubernetes", len(output_objects))
     return output_objects
 
 
 # Scale up an PVC in Kubernetes
 def scale_up_pvc(namespace, name, new_size):
     try:
+        logger.info("Scaling PVC %s.%s to %s", namespace, name, convert_bytes_to_storage(new_size))
+        
         result = kubernetes_core_api.patch_namespaced_persistent_volume_claim(
                     name=name,
                     namespace=namespace,
@@ -439,19 +468,19 @@ def scale_up_pvc(namespace, name, new_size):
                     }
                 )
 
-        print("  Desired New Size: {}".format(new_size))
-        print("  Actual New Size: {}".format(convert_storage_to_bytes(result.spec.resources.requests['storage'])))
+        actual_size = convert_storage_to_bytes(result.spec.resources.requests['storage'])
+        logger.info("  Desired size: %s", convert_bytes_to_storage(new_size))
+        logger.info("  Actual size: %s", convert_bytes_to_storage(actual_size))
 
         # If the new size is within' 10% of the desired size.  This is necessary because of the megabyte/mebibyte issue
-        if abs(convert_storage_to_bytes(result.spec.resources.requests['storage']) - new_size) < (new_size * 0.1):
+        if abs(actual_size - new_size) < (new_size * 0.1):
+            logger.info("Successfully scaled PVC %s.%s", namespace, name)
             return result
         else:
-            raise Exception("  New size did not take for some reason")
+            raise Exception("New size did not take for some reason")
 
-        return result
     except Exception as e:
-        print("  Exception raised while trying to scale up PVC {}.{} to {} ...".format(namespace, name, new_size))
-        print(e)
+        logger.error("Failed to scale PVC %s.%s to %s: %s", namespace, name, convert_bytes_to_storage(new_size), str(e))
         return False
 
 
@@ -459,14 +488,15 @@ def scale_up_pvc(namespace, name, new_size):
 def test_gmp_connection(gmp_client):
     """Test if we can successfully connect to Google Managed Prometheus"""
     try:
+        logger.debug("Testing connection to Google Managed Prometheus")
         if gmp_client.test_connection():
-            print("Successfully connected to Google Managed Prometheus")
+            logger.info("Successfully connected to Google Managed Prometheus")
             return True
         else:
-            print("ERROR: Failed to connect to Google Managed Prometheus")
+            logger.error("Failed to connect to Google Managed Prometheus")
             return False
     except Exception as e:
-        print(f"ERROR: Can not access Google Managed Prometheus: {e}")
+        logger.error("Cannot access Google Managed Prometheus: %s", str(e), exc_info=True)
         exit(-1)
 
 
@@ -477,18 +507,19 @@ def fetch_pvcs_from_gmp(gmp_client, label_match=PROMETHEUS_LABEL_MATCH):
     # Query for disk usage percentage
     disk_query = "ceil((1 - kubelet_volume_stats_available_bytes{{ {} }} / kubelet_volume_stats_capacity_bytes)*100)".format(label_match)
     
+    logger.debug("Querying GMP for disk usage metrics")
     try:
         disk_response = gmp_client.query(disk_query, timeout=HTTP_TIMEOUT)
         
         if 'data' not in disk_response or 'result' not in disk_response['data']:
-            print("ERROR: Unexpected response format from GMP disk query")
+            logger.error("Unexpected response format from GMP disk query")
             return []
         
         disk_results = disk_response['data']['result']
+        logger.debug("Found %d volumes with disk metrics", len(disk_results))
         
     except Exception as e:
-        print(f"ERROR: Failed to query disk metrics from GMP: {e}")
-        traceback.print_exc()
+        logger.error("Failed to query disk metrics from GMP: %s", str(e), exc_info=True)
         return []
     
     # Query for inode usage percentage
@@ -503,6 +534,7 @@ def fetch_pvcs_from_gmp(gmp_client, label_match=PROMETHEUS_LABEL_MATCH):
             for item in inode_response['data']['result']:
                 ourkey = "{}_{}".format(item['metric']['namespace'], item['metric']['persistentvolumeclaim'])
                 inject_values[ourkey] = item['value'][1]
+            logger.debug("Found %d volumes with inode metrics", len(inject_values))
         
         # Process and merge disk and inode results
         for item in disk_results:
@@ -511,13 +543,11 @@ def fetch_pvcs_from_gmp(gmp_client, label_match=PROMETHEUS_LABEL_MATCH):
                 if ourkey in inject_values:
                     item['value_inodes'] = inject_values[ourkey]
             except Exception as e:
-                print("Caught exception while trying to inject inode data, please report me...")
-                print(e)
+                logger.error("Exception while trying to inject inode data: %s", str(e))
             output_response_object.append(item)
             
     except Exception as e:
-        print("WARNING: Failed to query inode metrics from GMP, continuing with disk metrics only")
-        print(e)
+        logger.warning("Failed to query inode metrics from GMP, continuing with disk metrics only: %s", str(e))
         # Even if inode query fails, return disk results
         output_response_object = disk_results
     
@@ -526,6 +556,7 @@ def fetch_pvcs_from_gmp(gmp_client, label_match=PROMETHEUS_LABEL_MATCH):
 
 # Describe an specific PVC
 def describe_pvc(namespace, name, simple=False):
+    logger.debug("Describing PVC %s.%s", namespace, name)
     api_response = kubernetes_core_api.list_namespaced_persistent_volume_claim(namespace, limit=1, field_selector="metadata.name=" + name, timeout_seconds=HTTP_TIMEOUT)
     # print(api_response)
     for item in api_response.items:
@@ -533,6 +564,7 @@ def describe_pvc(namespace, name, simple=False):
         if simple:
             return convert_pvc_to_simpler_dict(item)
         return item
+    logger.error("No PVC found for %s.%s", namespace, name)
     raise Exception("No PVC found for {}:{}".format(namespace,name))
 
 
@@ -549,7 +581,7 @@ def get_involved_object_from_pvc(pvc):
 
 # Send events to Kubernetes.  This is used when we modify PVCs
 def send_kubernetes_event(namespace, name, reason, message, type="Normal"):
-
+    logger.debug("Sending Kubernetes event to %s.%s: %s", namespace, name, reason)
     try:
         # Lookup our PVC
         pvc = describe_pvc(namespace, name)
@@ -574,10 +606,11 @@ def send_kubernetes_event(namespace, name, reason, message, type="Normal"):
                )
 
         api_response = kubernetes_core_api.create_namespaced_event(namespace, body, field_manager="volume_autoscaler")
+        logger.debug("Successfully sent Kubernetes event to %s.%s", namespace, name)
     except ApiException as e:
-        print("Exception when calling CoreV1Api->create_namespaced_event: %s\n" % e)
+        logger.error("Exception when calling CoreV1Api->create_namespaced_event: %s", str(e))
     except:
-        traceback.print_exc()
+        logger.error("Unexpected error while sending Kubernetes event", exc_info=True)
 
 # Print a sexy human readable dict for volume
 def print_human_readable_volume_dict(input_dict):

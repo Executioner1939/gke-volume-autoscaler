@@ -1,4 +1,4 @@
-name: Docker Build and Push
+name: Build and Release
 
 on:
   push:
@@ -9,7 +9,7 @@ on:
       - 'v*'
 
 concurrency:
-  group: docker-build-${{ github.ref }}
+  group: build-release-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -18,6 +18,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    if: github.actor != 'github-actions[bot]'
     
     steps:
       - name: Checkout
@@ -54,3 +55,49 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  helm:
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'v3.12.0'
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Update chart version and image tag
+        run: |
+          # Update Chart.yaml version
+          sed -i "s/version: .*/version: ${{ steps.version.outputs.VERSION }}/" charts/volume-autoscaler/Chart.yaml
+          # Update values.yaml image tag
+          sed -i 's/tag: .*/tag: "${{ steps.version.outputs.VERSION }}"/' charts/volume-autoscaler/values.yaml
+
+      - name: Package Helm chart
+        run: |
+          mkdir -p /tmp/helm-packages
+          helm package charts/volume-autoscaler -d /tmp/helm-packages
+
+      - name: Update Helm repository index
+        run: |
+          cp /tmp/helm-packages/*.tgz docs/
+          helm repo index docs --url https://executioner1939.github.io/gke-volume-autoscaler/
+
+      - name: Configure Git
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+
+      - name: Commit and push Helm chart updates
+        run: |
+          git add charts/volume-autoscaler/Chart.yaml charts/volume-autoscaler/values.yaml docs/
+          git commit -m "chore: release Helm chart version ${{ steps.version.outputs.VERSION }} [skip ci]"
+          git push origin master

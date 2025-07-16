@@ -48,7 +48,7 @@ deploymentStrategy:
 
 # Our image is on DockerHub
 image:
-  repository: executioner1939/gke-volume-autoscaler
+  repository: shadowrhyder/gke-volume-autoscaler
   tag: latest  # Use specific version tags in production
 
 globalEnvs:

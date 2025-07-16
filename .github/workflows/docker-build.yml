@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  DOCKER_IMAGE: executioner1939/gke-volume-autoscaler
+  DOCKER_IMAGE: shadowrhyder/gke-volume-autoscaler
 
 jobs:
   build:

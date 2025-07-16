@@ -7,10 +7,10 @@ on:
       - master
     tags:
       - 'v*'
-  pull_request:
-    branches:
-      - main
-      - master
+
+concurrency:
+  group: docker-build-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   DOCKER_IMAGE: executioner1939/gke-volume-autoscaler

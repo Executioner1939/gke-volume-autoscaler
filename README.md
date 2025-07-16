@@ -1,6 +1,6 @@
 # Kubernetes Volume Autoscaler for Google Managed Prometheus (GKE)
 
-<a href="https://hub.docker.com/r/devopsnirvana/kubernetes-volume-autoscaler"><img src="https://img.shields.io/docker/pulls/devopsnirvana/kubernetes-volume-autoscaler?style=plastic" alt="Docker Hub Pulls"></a> <a href="https://github.com/DevOps-Nirvana/Kubernetes-Volume-Autoscaler/stargazers"><img src="https://img.shields.io/github/stars/DevOps-Nirvana/Kubernetes-Volume-Autoscaler?style=social" alt="Stargazers on Github"></a>
+<a href="https://github.com/Executioner1939/gke-volume-autoscaler/stargazers"><img src="https://img.shields.io/github/stars/Executioner1939/gke-volume-autoscaler?style=social" alt="Stargazers on Github"></a>
 
 This repository contains a [Kubernetes controller](https://kubernetes.io/docs/concepts/architecture/controller/) that automatically increases the size of a Persistent Volume Claim (PVC) in Kubernetes when it is nearing full (either on space OR inode usage). It is specifically designed for Google Kubernetes Engine (GKE) Autopilot and uses Google Managed Prometheus for metrics.
 
@@ -232,7 +232,3 @@ See original repository for pre-GMP versions
 ## Contributors
 
 This is a fork focused on Google Managed Prometheus. For the original multi-prometheus version, see the [original repository](https://github.com/DevOps-Nirvana/Kubernetes-Volume-Autoscaler).
-
-## Repository
-
-The source code for this project is available at: https://github.com/Executioner1939/gke-volume-autoscaler

@@ -3,10 +3,9 @@ name: volume-autoscaler
 
 # The typical config variables for the volume-autoscaler service, and their respective defaults
 
-# This is how we we can deploy this chart to a different namespace (or cluster) than Prometheus, by telling it where to access Prometheus
-#   Eg: http://prometheus-server.namespace.svc.cluster.local.  This can be auto-detected if run in the same namespace as prometheus
-# This is also how you can run this script remotely (eg: on your local machine to develop this tool against an remote Prometheus server)
-prometheus_url: ""
+# GCP Project ID for Google Managed Prometheus
+# If not set, will attempt to auto-detect from metadata service (works in GKE)
+gcp_project_id: ""
 # This is how we confiure the Slack integration, set the two values below
 slack_webhook_url: "REPLACEME"
 slack_channel: "REPLACEME"
@@ -31,15 +30,11 @@ scale_up_max_size: "16000000000000"
 scale_cooldown_time: "22200"
 # Set this to "true" to only print what it would have done, it will not send Slack messages either if you enable this
 dry_run: ""
-# What label selector to query on prometheus to limit the volumes you wish to use.  For example set this to "namespace=\"production\"" to limit to PVCs in production namespace
+# What label selector to query on GMP to limit the volumes you wish to use.  For example set this to "namespace=\"production\"" to limit to PVCs in production namespace
 prometheus_label_match: ""
 http_timeout: "15"
 # For debugging
 verbose: "false"
-# Victoriametrics or prometheus
-victoriametrics_mode: "false"
-# Auth header for mimir or cortex
-scope_orgid_auth_header: ""
 
 
 # Pretty much ignore anything below here I'd say, unless you really know what you're doing.  :)
@@ -61,9 +56,9 @@ globalEnvs:
   # !!! Note: You don't need to do anything in here, please set the values at the top of this file instead
   ####################################
 
-  # This is how we we can deploy this chart to a different namespace (or cluster) than Prometheus, by telling it where to access Prometheus
-  - name: PROMETHEUS_URL
-    value: "{{ .Values.prometheus_url }}"
+  # GCP Project ID for Google Managed Prometheus
+  - name: GCP_PROJECT_ID
+    value: "{{ .Values.gcp_project_id }}"
 
   # This is how we confiure the Slack integration, set the values below
   - name: SLACK_WEBHOOK_URL
@@ -116,13 +111,6 @@ globalEnvs:
   - name: VERBOSE
     value: "{{ .Values.verbose }}"
 
-  # Which monitoring stack you're running
-  - name: VICTORIAMETRICS_MODE
-    value: "{{ .Values.victoriametrics_mode }}"
-
-  # If you are using Cortex or Mimir you'll probably need to set an scope OrgID auth header for it
-  - name: SCOPE_ORGID_AUTH_HEADER
-    value: "{{ .Values.scope_orgid_auth_header }}"
 
 
 # Additional pod annotations
@@ -223,10 +211,11 @@ securityGroupIDs: []
 
 serviceAccount:
   enabled: true
-  # Add annotations if desited to your service account
+  # Add annotations if desired to your service account
   annotations: {}
-    # Here's an example of assigning an IAM role to a pod, remove the {} above and uncomment this if needed
-    # eks.amazonaws.com/role-arn: arn:aws:iam::123123123:role/role-name-goes-here
+    # For GKE Workload Identity, remove the {} above and uncomment this:
+    # iam.gke.io/gcp-service-account: volume-autoscaler@YOUR-PROJECT-ID.iam.gserviceaccount.com
+    # Note: You must also bind the GCP service account to this Kubernetes service account
 
 # This is absolutely necessary, this is how this service reads and updates PVCs and talks to Kubernetes
 # Do not change any of this, or the volume autoscaler will not function any more

@@ -1,12 +1,66 @@
-requirements.lock
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
 .DS_Store
-deployment/*/charts
-unused
-__pycache__
-helm-chart/templates/*
-values.yaml.upstream
+Thumbs.db
+
+# Local environment files
+.env
+.env.local
+unused-local-envs.sh
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.bak
 to_be_applied.yaml
-index.yaml
 *.patch
+
+# Helm
+*.tgz
+helm-chart/templates/*
+!helm-chart/templates/.keep
+values.yaml.upstream
+
+# Other
+requirements.lock
+deployment/*/charts
+index.yaml
 for-release
 unused*

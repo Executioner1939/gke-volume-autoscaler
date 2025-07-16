@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 import os
 import time
-from helpers import INTERVAL_TIME, PROMETHEUS_URL, DRY_RUN, VERBOSE, get_settings_for_prometheus_metrics, is_integer_or_float, print_human_readable_volume_dict
-from helpers import convert_bytes_to_storage, scale_up_pvc, testIfPrometheusIsAccessible, describe_all_pvcs, send_kubernetes_event
-from helpers import fetch_pvcs_from_prometheus, printHeaderAndConfiguration, calculateBytesToScaleTo, GracefulKiller, cache
+from helpers import INTERVAL_TIME, GCP_PROJECT_ID, DRY_RUN, VERBOSE, get_settings_for_prometheus_metrics, is_integer_or_float, print_human_readable_volume_dict
+from helpers import convert_bytes_to_storage, scale_up_pvc, test_gmp_connection, describe_all_pvcs, send_kubernetes_event
+from helpers import fetch_pvcs_from_gmp, printHeaderAndConfiguration, calculateBytesToScaleTo, GracefulKiller, cache
+from gmp_client import GMPClient
 from prometheus_client import start_http_server, Summary, Gauge, Counter, Info
 import slack
 import sys, traceback
@@ -23,7 +24,7 @@ PROMETHEUS_METRICS['num_pvcs_below_threshold'] = Gauge('volume_autoscaler_num_pv
 PROMETHEUS_METRICS['num_pvcs_below_threshold'].set(0)
 # Initialize our Prometheus metrics (info/settings)
 PROMETHEUS_METRICS['info'] = Info('volume_autoscaler_release', 'Release/version information about this volume autoscaler service')
-PROMETHEUS_METRICS['info'].info({'version': '1.0.7'})
+PROMETHEUS_METRICS['info'].info({'version': '2.0.0-gmp'})
 PROMETHEUS_METRICS['settings'] = Info('volume_autoscaler_settings', 'Settings currently used in this service')
 PROMETHEUS_METRICS['settings'].info(get_settings_for_prometheus_metrics())
 
@@ -33,8 +34,13 @@ MAIN_LOOP_TIME = 1
 # Entry point and main application loop
 if __name__ == "__main__":
 
-    # Test if our prometheus URL works before continuing
-    testIfPrometheusIsAccessible(PROMETHEUS_URL)
+    # Initialize GMP client and test connection
+    if not GCP_PROJECT_ID:
+        print("ERROR: GCP_PROJECT_ID must be set or detectable from metadata service")
+        exit(-1)
+    
+    gmp_client = GMPClient(GCP_PROJECT_ID)
+    test_gmp_connection(gmp_client)
 
     # Startup our prometheus metrics endpoint
     start_http_server(8000)
@@ -69,11 +75,11 @@ if __name__ == "__main__":
 
         # Fetch our volume usage from Prometheus
         try:
-            pvcs_in_prometheus = fetch_pvcs_from_prometheus(url=PROMETHEUS_URL)
-            print("Querying and found {} valid PVCs to assess in prometheus".format(len(pvcs_in_prometheus)))
+            pvcs_in_prometheus = fetch_pvcs_from_gmp(gmp_client)
+            print("Querying and found {} valid PVCs to assess in Google Managed Prometheus".format(len(pvcs_in_prometheus)))
             PROMETHEUS_METRICS['num_valid_pvcs'].set(len(pvcs_in_prometheus))
         except Exception:
-            print("Exception while trying to fetch PVC metrics from prometheus")
+            print("Exception while trying to fetch PVC metrics from Google Managed Prometheus")
             traceback.print_exc()
             time.sleep(MAIN_LOOP_TIME)
             continue
@@ -90,7 +96,7 @@ if __name__ == "__main__":
 
                 # Precursor check to ensure we have info for this pvc in kubernetes object
                 if volume_description not in pvcs_in_kubernetes:
-                    print("ERROR: The volume {} was not found in Kubernetes but had metrics in Prometheus.  This may be an old volume, was just deleted, or some random jitter is occurring.  If this continues to occur, please report an bug.  You might also be using an older version of Prometheus, please make sure you're using v2.30.0 or newer before reporting a bug for this.".format(volume_description))
+                    print("ERROR: The volume {} was not found in Kubernetes but had metrics in Google Managed Prometheus. This may be an old volume, was just deleted, or some random jitter is occurring. If this continues to occur, please report a bug.".format(volume_description))
                     continue
 
                 pvcs_in_kubernetes[volume_description]['volume_used_percent'] = volume_used_percent

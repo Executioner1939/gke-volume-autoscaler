@@ -4,25 +4,34 @@ import datetime
 import requests                # For making HTTP requests to Prometheus
 import kubernetes              # For talking to the Kubernetes API
 from kubernetes.client import ApiException
-from packaging import version  # For checking if prometheus version is new enough to use a new function present_over_time()
+# packaging import removed - no longer needed for version checking
 import signal                  # For sigkill handling
 import random                  # Random string generation
 import traceback               # Debugging/trace outputs
 import slack                   # For sending slack messages
 
 # Used below in init variables
-def detectPrometheusURL():
-
-    # Method #1: Use env vars which are set when run in the same namespace as prometheus
-    prometheus_ip_address = getenv('PROMETHEUS_SERVER_SERVICE_HOST')
-    prometheus_port = getenv('PROMETHEUS_SERVER_SERVICE_PORT_HTTP')
-
-    # TODO: If there's other ways to also detect prometheus (eg: try http://prometheus-server) please put them here...?
-
-    if not prometheus_ip_address or not prometheus_port:
-        print("ERROR: PROMETHEUS_URL was not set, and can not auto-detect where prometheus is")
-        exit(-1)
-    return "http://{}:{}".format(prometheus_ip_address,prometheus_port)
+def detect_gcp_project_id():
+    """Detect GCP project ID from environment or metadata service"""
+    # Try environment variable first
+    project_id = getenv('GCP_PROJECT_ID')
+    if project_id:
+        return project_id
+    
+    # Try to get from metadata service (works in GKE)
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            'http://metadata.google.internal/computeMetadata/v1/project/project-id',
+            headers={'Metadata-Flavor': 'Google'}
+        )
+        with urllib.request.urlopen(req, timeout=2) as response:
+            return response.read().decode('utf-8')
+    except Exception:
+        # Metadata service not available
+        pass
+    
+    return None
 
 # Input/configuration variables
 INTERVAL_TIME = int(getenv('INTERVAL_TIME') or 60)                               # How often (in seconds) to scan prometheus for checking if we need to resize
@@ -33,14 +42,11 @@ SCALE_UP_MIN_INCREMENT = int(getenv('SCALE_UP_MIN_INCREMENT') or 1000000000)    
 SCALE_UP_MAX_INCREMENT = int(getenv('SCALE_UP_MAX_INCREMENT') or 16000000000000) # How many bytes is the maximum that we can resize up by, default is 16TB (in bytes, so 16000000000000)
 SCALE_UP_MAX_SIZE = int(getenv('SCALE_UP_MAX_SIZE') or 16000000000000)           # How many bytes is the maximum disk size that we can resize up, default is 16TB for EBS volumes in AWS (in bytes, so 16000000000000)
 SCALE_COOLDOWN_TIME = int(getenv('SCALE_COOLDOWN_TIME') or 22200)                # How long (in seconds) we must wait before scaling this volume again.  For AWS EBS, this is 6 hours which is 21600 seconds but for good measure we add an extra 10 minutes to this, so 22200
-PROMETHEUS_URL = getenv('PROMETHEUS_URL') or detectPrometheusURL()               # Where prometheus is, if not provided it can auto-detect it if it's in the same namespace as us
+GCP_PROJECT_ID = getenv('GCP_PROJECT_ID') or detect_gcp_project_id()             # GCP project ID for Google Managed Prometheus
 DRY_RUN = True if getenv('DRY_RUN', "false").lower() == "true" else False        # If we want to dry-run this
 PROMETHEUS_LABEL_MATCH = getenv('PROMETHEUS_LABEL_MATCH') or ''                  # A PromQL label query to restrict volumes for this to see and scale, without braces.  eg: 'namespace="dev"'
 HTTP_TIMEOUT = int(getenv('HTTP_TIMEOUT', "15")) or 15                           # Allows to set the timeout for calls to Prometheus and Kubernetes.  This might be needed if your Prometheus or Kubernetes is over a remote WAN link with high latency and/or is heavily loaded
-PROMETHEUS_VERSION = "0.0.0"                                                     # Used to detect the availability of a new function called present_over_time only available on Prometheus v2.30.0 or newer, this is auto-detected and updated, not set by a user
 VERBOSE = True if getenv('VERBOSE', "false").lower() == "true" else False        # If we want to verbose mode
-VICTORIAMETRICS_COMPAT = True if getenv('VICTORIAMETRICS_MODE', "false").lower() == "true" else False # Whether to skip the prometheus check and assume victoriametrics
-SCOPE_ORGID_AUTH_HEADER = getenv('SCOPE_ORGID_AUTH_HEADER') or ''                # If we want to use Mimir or AgentMode which requires an orgid header.  See: https://grafana.com/docs/mimir/latest/references/http-api/#authentication
 
 
 # Simple helper to pass back
@@ -54,7 +60,7 @@ def get_settings_for_prometheus_metrics():
         'scale_up_maximum_increment_bytes': str(SCALE_UP_MAX_INCREMENT),
         'scale_up_maximum_size_bytes': str(SCALE_UP_MAX_SIZE),
         'scale_cooldown_time_seconds': str(SCALE_COOLDOWN_TIME),
-        'prometheus_url': PROMETHEUS_URL,
+        'gcp_project_id': GCP_PROJECT_ID if GCP_PROJECT_ID else 'not-set',
         'dry_run': "true" if DRY_RUN else "false",
         'prometheus_label_match': PROMETHEUS_LABEL_MATCH,
         'prometheus_version_detected': PROMETHEUS_VERSION,
@@ -62,10 +68,8 @@ def get_settings_for_prometheus_metrics():
         'verbose_enabled': "true" if VERBOSE else "false",
     }
 
-# Set headers if desired from above
+# Headers are now handled by GMP client
 headers = {}
-if len(SCOPE_ORGID_AUTH_HEADER) > 0:
-    headers['X-Scope-OrgID'] = SCOPE_ORGID_AUTH_HEADER
 
 # This handler helps handle sigint/term gracefully (not in the middle of an runloop)
 class GracefulKiller:
@@ -134,7 +138,7 @@ def printHeaderAndConfiguration():
     print("-------------------------------------------------------------------------------------------------------------")
     print("               Volume Autoscaler - Configuration               ")
     print("-------------------------------------------------------------------------------------------------------------")
-    print("                 Prometheus URL: {}".format(PROMETHEUS_URL))
+    print("                 GCP Project ID: {}".format(GCP_PROJECT_ID if GCP_PROJECT_ID else 'not-set'))
     print("             Prometheus Version: {}{}".format(PROMETHEUS_VERSION," (upgrade to >= 2.30.0 to prevent some false positives)" if version.parse(PROMETHEUS_VERSION) < version.parse("2.30.0") else ""))
     print("              Prometheus Labels: {{{}}}".format(PROMETHEUS_LABEL_MATCH))
     print("        Interval to query usage: every {} seconds".format(INTERVAL_TIME))
@@ -148,8 +152,7 @@ def printHeaderAndConfiguration():
     print("                   Verbose Mode: {}".format("ENABLED" if VERBOSE else "disabled"))
     print("                        Dry Run: {}".format("ENABLED, no scaling will occur!" if DRY_RUN else "disabled"))
     print("     HTTP Timeouts for k8s/prom: {} seconds".format(HTTP_TIMEOUT))
-    print("           VictoriaMetrics mode: {}".format("ENABLED" if VICTORIAMETRICS_COMPAT else "disabled"))
-    print("X-Scope-OrgID Header for Cortex: {}".format(SCOPE_ORGID_AUTH_HEADER if len(SCOPE_ORGID_AUTH_HEADER) else "disabled"))
+    print("             Google Managed Prometheus Mode")
     print(" Sending notifications to Slack: {}".format("ENABLED" if len(slack.SLACK_WEBHOOK_URL) > 0 else "disabled"))
     if len(slack.SLACK_WEBHOOK_URL) > 0:
         print("                  Slack channel: {}".format(slack.SLACK_CHANNEL))
@@ -452,72 +455,72 @@ def scale_up_pvc(namespace, name, new_size):
         return False
 
 
-# Test if prometheus is accessible, and gets the build version so we know which function(s) are available or not, primarily for present_over_time below
-def testIfPrometheusIsAccessible(url):
-    global PROMETHEUS_VERSION
-    if VICTORIAMETRICS_COMPAT:
-      # Victoriametrics roughly resembles a very recent prometheus
-      PROMETHEUS_VERSION = "2.41.0"
-      return # Victoria doesn't export stats/buildinfo endpoint, so just assume it's accessible.
-
+# Test if GMP is accessible
+def test_gmp_connection(gmp_client):
+    """Test if we can successfully connect to Google Managed Prometheus"""
     try:
-        response = requests.get(url + '/api/v1/status/buildinfo', timeout=HTTP_TIMEOUT, headers=headers)
-        if response.status_code != 200:
-            raise Exception("ERROR: Received status code {} while trying to initialize on Prometheus: {}".format(response.status_code, url))
-        response_object = response.json()
-        PROMETHEUS_VERSION = response_object['data']['version']
+        if gmp_client.test_connection():
+            print("Successfully connected to Google Managed Prometheus")
+            return True
+        else:
+            print("ERROR: Failed to connect to Google Managed Prometheus")
+            return False
     except Exception as e:
-        print("Failed to verify that prometheus is accessible!")
-        print(e)
+        print(f"ERROR: Can not access Google Managed Prometheus: {e}")
         exit(-1)
 
 
-# Get a list of PVCs from Prometheus with their metrics of disk usage
-def fetch_pvcs_from_prometheus(url, label_match=PROMETHEUS_LABEL_MATCH):
-
-    # This only works on Prometheus v2.30.0 or newer, using this helps prevent false-negatives only returning recent pvcs (in the last hour)
-    if version.parse(PROMETHEUS_VERSION) >= version.parse("2.30.0"):
-        response = requests.get(url + '/api/v1/query', params={'query': "ceil((1 - kubelet_volume_stats_available_bytes{{ {} }} / kubelet_volume_stats_capacity_bytes)*100) and present_over_time(kubelet_volume_stats_available_bytes{{ {} }}[1h])".format(label_match,label_match)}, timeout=HTTP_TIMEOUT, headers=headers)
-    else:
-        response = requests.get(url + '/api/v1/query', params={'query': "ceil((1 - kubelet_volume_stats_available_bytes{{ {} }} / kubelet_volume_stats_capacity_bytes)*100)".format(label_match,label_match)}, timeout=HTTP_TIMEOUT, headers=headers)
-
-    response_object = response.json()
-
-    if response_object['status'] != 'success':
-        print("Prometheus query failed with code: {}".format(response_object['status']))
-        if 'error' in response_object:
-            print("Prometheus Error: {}".format(response_object['error']))
-            exit(-1)
-
-    #TODO: Inject here "trying" to get inode percentage usage also
+# Get a list of PVCs from Google Managed Prometheus with their metrics of disk usage
+def fetch_pvcs_from_gmp(gmp_client, label_match=PROMETHEUS_LABEL_MATCH):
+    """Fetch PVC metrics from Google Managed Prometheus"""
+    
+    # Query for disk usage percentage
+    disk_query = "ceil((1 - kubelet_volume_stats_available_bytes{{ {} }} / kubelet_volume_stats_capacity_bytes)*100)".format(label_match)
+    
     try:
-        if version.parse(PROMETHEUS_VERSION) >= version.parse("2.30.0"):
-            inodes_response = requests.get(url + '/api/v1/query', params={'query': "ceil((1 - kubelet_volume_stats_inodes_free{{ {} }} / kubelet_volume_stats_inodes)*100) and present_over_time(kubelet_volume_stats_inodes_free{{ {} }}[1h])".format(label_match,label_match)}, timeout=HTTP_TIMEOUT, headers=headers)
-        else:
-            inodes_response = requests.get(url + '/api/v1/query', params={'query': "ceil((1 - kubelet_volume_stats_inodes_free{{ {} }} / kubelet_volume_stats_inodes)*100)".format(label_match,label_match)}, timeout=HTTP_TIMEOUT, headers=headers)
-        inodes_response_object = inodes_response.json()
-
-        # Prepare values to merge/inject with our first response_object list/array above
+        disk_response = gmp_client.query(disk_query, timeout=HTTP_TIMEOUT)
+        
+        if 'data' not in disk_response or 'result' not in disk_response['data']:
+            print("ERROR: Unexpected response format from GMP disk query")
+            return []
+        
+        disk_results = disk_response['data']['result']
+        
+    except Exception as e:
+        print(f"ERROR: Failed to query disk metrics from GMP: {e}")
+        traceback.print_exc()
+        return []
+    
+    # Query for inode usage percentage
+    output_response_object = []
+    try:
+        inode_query = "ceil((1 - kubelet_volume_stats_inodes_free{{ {} }} / kubelet_volume_stats_inodes)*100)".format(label_match)
+        inode_response = gmp_client.query(inode_query, timeout=HTTP_TIMEOUT)
+        
+        # Prepare values to merge/inject with our first response list/array above
         inject_values = {}
-        for item in inodes_response_object['data']['result']:
-            ourkey = "{}_{}".format(item['metric']['namespace'], item['metric']['persistentvolumeclaim'])
-            inject_values[ourkey] = item['value'][1]
-
-        output_response_object = []
-        # Inject/merge them...
-        for item in response_object['data']['result']:
+        if 'data' in inode_response and 'result' in inode_response['data']:
+            for item in inode_response['data']['result']:
+                ourkey = "{}_{}".format(item['metric']['namespace'], item['metric']['persistentvolumeclaim'])
+                inject_values[ourkey] = item['value'][1]
+        
+        # Process and merge disk and inode results
+        for item in disk_results:
             try:
                 ourkey = "{}_{}".format(item['metric']['namespace'], item['metric']['persistentvolumeclaim'])
                 if ourkey in inject_values:
                     item['value_inodes'] = inject_values[ourkey]
             except Exception as e:
-                print("Caught exception while trying to inject, please report me...")
+                print("Caught exception while trying to inject inode data, please report me...")
                 print(e)
             output_response_object.append(item)
+            
     except Exception as e:
-        print("Caught exception while trying to inject inode usage, please report me...")
+        print("WARNING: Failed to query inode metrics from GMP, continuing with disk metrics only")
         print(e)
-
+        # Even if inode query fails, return disk results
+        output_response_object = disk_results
+    
     return output_response_object
 
 

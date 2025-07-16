@@ -1,7 +1,7 @@
 from os import getenv          # Environment variable handling
 import time                    # Sleep/time
 import datetime
-import requests                # For making HTTP requests to Prometheus
+import requests                # For making HTTP requests to GMP
 import kubernetes              # For talking to the Kubernetes API
 from kubernetes.client import ApiException
 # packaging import removed - no longer needed for version checking
@@ -37,7 +37,7 @@ def detect_gcp_project_id():
     return None
 
 # Input/configuration variables
-INTERVAL_TIME = int(getenv('INTERVAL_TIME') or 60)                               # How often (in seconds) to scan prometheus for checking if we need to resize
+INTERVAL_TIME = int(getenv('INTERVAL_TIME') or 60)                               # How often (in seconds) to scan GMP for checking if we need to resize
 SCALE_ABOVE_PERCENT = int(getenv('SCALE_ABOVE_PERCENT') or 80)                   # What percent out of 100 the volume must be consuming before considering to scale it
 SCALE_AFTER_INTERVALS = int(getenv('SCALE_AFTER_INTERVALS') or 5)                # How many intervals of INTERVAL_TIME a volume must be above SCALE_ABOVE_PERCENT before we scale
 SCALE_UP_PERCENT = int(getenv('SCALE_UP_PERCENT') or 20)                         # How much percent of the current volume size to scale up by.  eg: 100 == (if disk is 10GB, scale to 20GB), eg: 20 == (if disk is 10GB, scale to 12GB)
@@ -47,13 +47,13 @@ SCALE_UP_MAX_SIZE = int(getenv('SCALE_UP_MAX_SIZE') or 16000000000000)          
 SCALE_COOLDOWN_TIME = int(getenv('SCALE_COOLDOWN_TIME') or 22200)                # How long (in seconds) we must wait before scaling this volume again.  For AWS EBS, this is 6 hours which is 21600 seconds but for good measure we add an extra 10 minutes to this, so 22200
 GCP_PROJECT_ID = getenv('GCP_PROJECT_ID') or detect_gcp_project_id()             # GCP project ID for Google Managed Prometheus
 DRY_RUN = True if getenv('DRY_RUN', "false").lower() == "true" else False        # If we want to dry-run this
-PROMETHEUS_LABEL_MATCH = getenv('PROMETHEUS_LABEL_MATCH') or ''                  # A PromQL label query to restrict volumes for this to see and scale, without braces.  eg: 'namespace="dev"'
-HTTP_TIMEOUT = int(getenv('HTTP_TIMEOUT', "15")) or 15                           # Allows to set the timeout for calls to Prometheus and Kubernetes.  This might be needed if your Prometheus or Kubernetes is over a remote WAN link with high latency and/or is heavily loaded
+GMP_LABEL_MATCH = getenv('GMP_LABEL_MATCH') or ''                              # A PromQL label query to restrict volumes for this to see and scale, without braces.  eg: 'namespace="dev"'
+HTTP_TIMEOUT = int(getenv('HTTP_TIMEOUT', "15")) or 15                           # Allows to set the timeout for calls to GMP and Kubernetes.  This might be needed if your GMP or Kubernetes is over a remote WAN link with high latency and/or is heavily loaded
 VERBOSE = True if getenv('VERBOSE', "false").lower() == "true" else False        # If we want to verbose mode
 
 
 # Simple helper to pass back
-def get_settings_for_prometheus_metrics():
+def get_settings_for_metrics():
     return {
         'interval_time_seconds': str(INTERVAL_TIME),
         'scale_above_percent': str(SCALE_ABOVE_PERCENT),
@@ -65,8 +65,8 @@ def get_settings_for_prometheus_metrics():
         'scale_cooldown_time_seconds': str(SCALE_COOLDOWN_TIME),
         'gcp_project_id': GCP_PROJECT_ID if GCP_PROJECT_ID else 'not-set',
         'dry_run': "true" if DRY_RUN else "false",
-        'prometheus_label_match': PROMETHEUS_LABEL_MATCH,
-        'prometheus_version_detected': PROMETHEUS_VERSION,
+        'gmp_label_match': GMP_LABEL_MATCH,
+        'gmp_mode': 'true',
         'http_timeout_seconds': str(HTTP_TIMEOUT),
         'verbose_enabled': "true" if VERBOSE else "false",
     }
@@ -141,7 +141,7 @@ def printHeaderAndConfiguration():
     logger.info("Volume Autoscaler Configuration:")
     logger.info("  Mode: Google Managed Prometheus (GMP)")
     logger.info("  GCP Project ID: %s", GCP_PROJECT_ID if GCP_PROJECT_ID else 'not-set')
-    logger.info("  Label selector: {%s}", PROMETHEUS_LABEL_MATCH)
+    logger.info("  Label selector: {%s}", GMP_LABEL_MATCH)
     logger.info("  Query interval: %d seconds", INTERVAL_TIME)
     logger.info("  Scale after: %d intervals (%d seconds total)", SCALE_AFTER_INTERVALS, SCALE_AFTER_INTERVALS * INTERVAL_TIME)
     logger.info("  Scale when disk over: %d%%", SCALE_ABOVE_PERCENT)
@@ -501,7 +501,7 @@ def test_gmp_connection(gmp_client):
 
 
 # Get a list of PVCs from Google Managed Prometheus with their metrics of disk usage
-def fetch_pvcs_from_gmp(gmp_client, label_match=PROMETHEUS_LABEL_MATCH):
+def fetch_pvcs_from_gmp(gmp_client, label_match=GMP_LABEL_MATCH):
     """Fetch PVC metrics from Google Managed Prometheus"""
     
     # Query for disk usage percentage

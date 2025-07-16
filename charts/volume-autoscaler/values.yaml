@@ -31,7 +31,7 @@ scale_cooldown_time: "22200"
 # Set this to "true" to only print what it would have done, it will not send Slack messages either if you enable this
 dry_run: ""
 # What label selector to query on GMP to limit the volumes you wish to use.  For example set this to "namespace=\"production\"" to limit to PVCs in production namespace
-prometheus_label_match: ""
+gmp_label_match: ""
 http_timeout: "15"
 # For debugging
 verbose: "false"
@@ -100,10 +100,10 @@ globalEnvs:
   # Set this to "true" to only print what it would have done, it will not send Slack messages either if you enable this
   - name: DRY_RUN
     value: "{{ .Values.dry_run }}"
-  # What label selector to query on prometheus to limit the volumes you wish to use.  For example set this to "namespace=\"production\"" to limit to PVCs in production namespace
-  - name: PROMETHEUS_LABEL_MATCH
-    value: "{{ .Values.prometheus_label_match }}"
-  # How long to wait for Prometheus and Kubernetes to get back to us for all API calls
+  # What label selector to query on GMP to limit the volumes you wish to use.  For example set this to "namespace=\"production\"" to limit to PVCs in production namespace
+  - name: GMP_LABEL_MATCH
+    value: "{{ .Values.gmp_label_match }}"
+  # How long to wait for GMP and Kubernetes to get back to us for all API calls
   - name: HTTP_TIMEOUT
     value: "{{ .Values.http_timeout }}"
 
@@ -171,7 +171,7 @@ extraContainers: []
 volumes: []
 volumeMounts: []
 
-# We use a service so we can have prometheus metrics
+# We use a service so we can have metrics
 service:
   enabled: true
   type: ClusterIP

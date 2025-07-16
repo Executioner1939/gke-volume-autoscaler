@@ -3,7 +3,7 @@ import os
 import time
 import logging
 import sys
-from helpers import INTERVAL_TIME, GCP_PROJECT_ID, DRY_RUN, VERBOSE, get_settings_for_prometheus_metrics, is_integer_or_float, print_human_readable_volume_dict
+from helpers import INTERVAL_TIME, GCP_PROJECT_ID, DRY_RUN, VERBOSE, get_settings_for_metrics, is_integer_or_float, print_human_readable_volume_dict
 from helpers import convert_bytes_to_storage, scale_up_pvc, test_gmp_connection, describe_all_pvcs, send_kubernetes_event
 from helpers import fetch_pvcs_from_gmp, printHeaderAndConfiguration, calculateBytesToScaleTo, GracefulKiller, cache
 from gmp_client import GMPClient
@@ -20,24 +20,24 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Initialize our Prometheus metrics (counters)
-PROMETHEUS_METRICS = {}
-PROMETHEUS_METRICS['resize_evaluated']  = Counter('volume_autoscaler_resize_evaluated',  'Counter which is increased every time we evaluate resizing PVCs')
-PROMETHEUS_METRICS['resize_attempted']  = Counter('volume_autoscaler_resize_attempted',  'Counter which is increased every time we attempt to resize')
-PROMETHEUS_METRICS['resize_successful'] = Counter('volume_autoscaler_resize_successful', 'Counter which is increased every time we successfully resize')
-PROMETHEUS_METRICS['resize_failure']    = Counter('volume_autoscaler_resize_failure',    'Counter which is increased every time we fail to resize')
-# Initialize our Prometheus metrics (gauges)
-PROMETHEUS_METRICS['num_valid_pvcs'] = Gauge('volume_autoscaler_num_valid_pvcs', 'Gauge with the number of valid PVCs detected which we found to consider for scaling')
-PROMETHEUS_METRICS['num_valid_pvcs'].set(0)
-PROMETHEUS_METRICS['num_pvcs_above_threshold'] = Gauge('volume_autoscaler_num_pvcs_above_threshold', 'Gauge with the number of PVCs detected above the desired percentage threshold')
-PROMETHEUS_METRICS['num_pvcs_above_threshold'].set(0)
-PROMETHEUS_METRICS['num_pvcs_below_threshold'] = Gauge('volume_autoscaler_num_pvcs_below_threshold', 'Gauge with the number of PVCs detected below the desired percentage threshold')
-PROMETHEUS_METRICS['num_pvcs_below_threshold'].set(0)
-# Initialize our Prometheus metrics (info/settings)
-PROMETHEUS_METRICS['info'] = Info('volume_autoscaler_release', 'Release/version information about this volume autoscaler service')
-PROMETHEUS_METRICS['info'].info({'version': '2.0.0-gmp'})
-PROMETHEUS_METRICS['settings'] = Info('volume_autoscaler_settings', 'Settings currently used in this service')
-PROMETHEUS_METRICS['settings'].info(get_settings_for_prometheus_metrics())
+# Initialize our metrics (counters)
+METRICS = {}
+METRICS['resize_evaluated']  = Counter('volume_autoscaler_resize_evaluated',  'Counter which is increased every time we evaluate resizing PVCs')
+METRICS['resize_attempted']  = Counter('volume_autoscaler_resize_attempted',  'Counter which is increased every time we attempt to resize')
+METRICS['resize_successful'] = Counter('volume_autoscaler_resize_successful', 'Counter which is increased every time we successfully resize')
+METRICS['resize_failure']    = Counter('volume_autoscaler_resize_failure',    'Counter which is increased every time we fail to resize')
+# Initialize our metrics (gauges)
+METRICS['num_valid_pvcs'] = Gauge('volume_autoscaler_num_valid_pvcs', 'Gauge with the number of valid PVCs detected which we found to consider for scaling')
+METRICS['num_valid_pvcs'].set(0)
+METRICS['num_pvcs_above_threshold'] = Gauge('volume_autoscaler_num_pvcs_above_threshold', 'Gauge with the number of PVCs detected above the desired percentage threshold')
+METRICS['num_pvcs_above_threshold'].set(0)
+METRICS['num_pvcs_below_threshold'] = Gauge('volume_autoscaler_num_pvcs_below_threshold', 'Gauge with the number of PVCs detected below the desired percentage threshold')
+METRICS['num_pvcs_below_threshold'].set(0)
+# Initialize our metrics (info/settings)
+METRICS['info'] = Info('volume_autoscaler_release', 'Release/version information about this volume autoscaler service')
+METRICS['info'].info({'version': '2.0.0-gmp'})
+METRICS['settings'] = Info('volume_autoscaler_settings', 'Settings currently used in this service')
+METRICS['settings'].info(get_settings_for_metrics())
 
 # Other globals
 MAIN_LOOP_TIME = 1
@@ -54,8 +54,8 @@ if __name__ == "__main__":
     gmp_client = GMPClient(GCP_PROJECT_ID)
     test_gmp_connection(gmp_client)
 
-    # Startup our prometheus metrics endpoint
-    logger.info("Starting Prometheus metrics server on port 8000")
+    # Startup our metrics endpoint
+    logger.info("Starting metrics server on port 8000")
     start_http_server(8000)
 
     # TODO: Test k8s access, or just test on-the-fly below?
@@ -79,27 +79,27 @@ if __name__ == "__main__":
 
         # In every loop, fetch all our pvcs state from Kubernetes
         try:
-            PROMETHEUS_METRICS['resize_evaluated'].inc()
+            METRICS['resize_evaluated'].inc()
             pvcs_in_kubernetes = describe_all_pvcs(simple=True)
         except Exception as e:
             logger.error("Exception while trying to describe all PVCs: %s", str(e), exc_info=True)
             time.sleep(MAIN_LOOP_TIME)
             continue
 
-        # Fetch our volume usage from Prometheus
+        # Fetch our volume usage from GMP
         try:
-            pvcs_in_prometheus = fetch_pvcs_from_gmp(gmp_client)
-            logger.info("Found %d valid PVCs to assess in Google Managed Prometheus", len(pvcs_in_prometheus))
-            PROMETHEUS_METRICS['num_valid_pvcs'].set(len(pvcs_in_prometheus))
+            pvcs_in_gmp = fetch_pvcs_from_gmp(gmp_client)
+            logger.info("Found %d valid PVCs to assess in Google Managed Prometheus", len(pvcs_in_gmp))
+            METRICS['num_valid_pvcs'].set(len(pvcs_in_gmp))
         except Exception as e:
             logger.error("Exception while trying to fetch PVC metrics from Google Managed Prometheus: %s", str(e), exc_info=True)
             time.sleep(MAIN_LOOP_TIME)
             continue
 
         # Iterate through every item and handle it accordingly
-        PROMETHEUS_METRICS['num_pvcs_above_threshold'].set(0)  # Reset these each loop
-        PROMETHEUS_METRICS['num_pvcs_below_threshold'].set(0)  # Reset these each loop
-        for item in pvcs_in_prometheus:
+        METRICS['num_pvcs_above_threshold'].set(0)  # Reset these each loop
+        METRICS['num_pvcs_below_threshold'].set(0)  # Reset these each loop
+        for item in pvcs_in_gmp:
             try:
                 volume_name = str(item['metric']['persistentvolumeclaim'])
                 volume_namespace = str(item['metric']['namespace'])
@@ -128,13 +128,13 @@ if __name__ == "__main__":
 
                 # Check if we are NOT in an alert condition
                 if volume_used_percent < pvcs_in_kubernetes[volume_description]['scale_above_percent'] and volume_used_inode_percent < pvcs_in_kubernetes[volume_description]['scale_above_percent']:
-                    PROMETHEUS_METRICS['num_pvcs_below_threshold'].inc()
+                    METRICS['num_pvcs_below_threshold'].inc()
                     cache.unset(volume_description)
                     if VERBOSE:
                         logger.debug("Volume %s is below threshold (%d%%)", volume_description, pvcs_in_kubernetes[volume_description]['scale_above_percent'])
                     continue
                 else:
-                    PROMETHEUS_METRICS['num_pvcs_above_threshold'].inc()
+                    METRICS['num_pvcs_above_threshold'].inc()
 
                 # If we are in alert condition, record this in our simple in-memory counter
                 if cache.get(volume_description):
@@ -231,7 +231,7 @@ if __name__ == "__main__":
                     continue
 
                 # If we aren't dry-run, lets resize
-                PROMETHEUS_METRICS['resize_attempted'].inc()
+                METRICS['resize_attempted'].inc()
                 print("  RESIZING disk from {} to {}".format(convert_bytes_to_storage(pvcs_in_kubernetes[volume_description]['volume_size_status_bytes']), convert_bytes_to_storage(resize_to_bytes)))
                 status_output = "to scale up `{}` by `{}%` from `{}` to `{}`, it was using more than `{}%` disk or inode space over the last `{} seconds`".format(
                     volume_description,
@@ -248,7 +248,7 @@ if __name__ == "__main__":
                 )
 
                 if scale_up_pvc(volume_namespace, volume_name, resize_to_bytes):
-                    PROMETHEUS_METRICS['resize_successful'].inc()
+                    METRICS['resize_successful'].inc()
                     # Save this to cache for debouncing
                     cache.set(f"{volume_description}-has-been-resized", True)
                     # Print success to console
@@ -260,7 +260,7 @@ if __name__ == "__main__":
                         print(f"Sending slack message to {slack.SLACK_CHANNEL}")
                         slack.send(status_output)
                 else:
-                    PROMETHEUS_METRICS['resize_failure'].inc()
+                    METRICS['resize_failure'].inc()
                     # Print failure to console
                     status_output = "FAILED requesting {}".format(status_output)
                     print(status_output)
